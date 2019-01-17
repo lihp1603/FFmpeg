@@ -45,10 +45,28 @@ static const EGLint configAttribs[] = {
     EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
     EGL_NONE};
 #endif
+
+//这里在一个gl中标准化的设备坐标中定义需要绘制的画布的顶点坐标值
 static const float position[12] = {
-  -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f
+    -1.0f, -1.0f,
+  	 1.0f, -1.0f, 
+  	-1.0f, 1.0f, 
+  	-1.0f, 1.0f, 
+  	 1.0f, -1.0f, 
+  	 1.0f, 1.0f
 };
 
+//厉害的方法，一般我们做纹理贴图的时候，会将纹理贴图的坐标像顶点坐标一样，从cpu传入到gpu
+//大家都知道,这种传输是效率比较低的方法
+//这里,作者用了一种从顶点坐标转化的方法来实现纹理贴图坐标，从而提升效率
+// vec2 uv = position * 0.5 + 0.5;这个地方是把顶点坐标从[-1,1]转化为[0,1]
+//这里将[-1,1]转化为[0,1]主要是为了和后面的纹理贴图坐标,减少一次纹理贴图坐标的传输
+//厉害
+
+//_uv = vec2(uv.x, 1.0 - uv.y);
+//相当于_uv.x=uv.x;_uv.y=1-uv.y
+//将这个_uv代入到后面的函数getFromColor和getToColor函数中再进行一次计算
+//变化为texture2D(form,_uv.x,1.0-(_uv.y))代入化简texture2D(form,_uv.x,_uv.y)
 static const GLchar *v_shader_source =
   "attribute vec2 position;\n"
   "varying vec2 _uv;\n"
@@ -80,6 +98,9 @@ static const GLchar *f_shader_template =
   "  gl_FragColor = transition(_uv);\n"
   "}\n";
 
+
+//GLSL中mix函数genType mix (genType x, genType y, genType a)是线性插值的实现方法,
+//它返回线性混合的x和y，如：x*(1-a)+y*a
 // default to a basic fade effect
 static const GLchar *f_default_transition_source =
   "vec4 transition (vec2 uv) {\n"
@@ -374,6 +395,7 @@ static AVFrame *apply_transition(FFFrameSync *fs,
 
   const float ts = ((fs->pts - c->first_pts) / (float)fs->time_base.den) - c->offset;
   const float progress = FFMAX(0.0f, FFMIN(1.0f, ts / c->duration));
+  //progress的计算值:ts<0,progress=0;ts>1,progress=1;0<ts<1,progress=ts;
   // av_log(ctx, AV_LOG_ERROR, "transition '%s' %llu %f %f\n", c->source, fs->pts - c->first_pts, ts, progress);
   glUniform1f(c->progress, progress);
 
