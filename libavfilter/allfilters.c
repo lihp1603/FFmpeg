@@ -225,6 +225,7 @@ extern AVFilter ff_vf_framestep;
 extern AVFilter ff_vf_frei0r;
 extern AVFilter ff_vf_fspp;
 extern AVFilter ff_vf_gblur;
+extern AVFilter ff_vf_gblurex;
 extern AVFilter ff_vf_geq;
 extern AVFilter ff_vf_gradfun;
 extern AVFilter ff_vf_graphmonitor;
