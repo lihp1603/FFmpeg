@@ -38,6 +38,8 @@
 #include "libavutil/imgutils.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/opt.h"
+#include "libswscale/swscale.h"
+
 
 static const char *const var_names[] = {
     "in_w", "iw",   ///< width  of the input video
@@ -165,55 +167,29 @@ static int parse_json_file(DynamicCropContext* dcctx,char* file_name){
 				dcctx->identfFrameSize=root_size;
 				av_log(dcctx, AV_LOG_TRACE,"the json root array size:%d.\n",root_size);
 			}
+						
 			for(int i=0;i<root_size;i++){
-				cJSON *jsonArr=cJSON_GetArrayItem(json_root,i);
-				if(jsonArr==NULL){
+				cJSON *jsonFrame=cJSON_GetArrayItem(json_root,i);
+				if(jsonFrame==NULL){
 					continue;
 				}
-				if(cJSON_IsArray(jsonArr)&&cJSON_GetArraySize(jsonArr)>0){
-					float percentage_best=0;
-					for(int j=0;j<cJSON_GetArraySize(jsonArr);j++){
-						cJSON* jsonObj =	cJSON_GetArrayItem(jsonArr,j);
-						if(jsonObj==NULL||!cJSON_IsObject(jsonObj)){
-							continue;
-						}
-						IdentfFrameInfo *identfFrameInfo = &dcctx->identfFrame[i];
-						identfFrameInfo->nFrameIndex=i;											
-						if(cJSON_HasObjectItem(jsonObj,"name")&&
-							cJSON_HasObjectItem(jsonObj,"percentage_probability")&&
-							cJSON_HasObjectItem(jsonObj,"box_points")){
-							cJSON* jsonNameObj=cJSON_GetObjectItem(jsonObj,"name");
-							cJSON* jsonPercentObj=cJSON_GetObjectItem(jsonObj,"percentage_probability");
-							cJSON* jsonBoxObj=cJSON_GetObjectItem(jsonObj,"box_points");
-							if(jsonNameObj&&jsonPercentObj&&jsonBoxObj&&cJSON_IsArray(jsonBoxObj)){							
-								//读取对应的值
-								float percent = (float)jsonPercentObj->valuedouble;
-								char* name = jsonNameObj->valuestring;
-								av_log(dcctx, AV_LOG_TRACE,"the json percent:%f,name:%s.\n",percent,name);
-								//这里只过滤需要的数据
-								if(name&&strcmp(name, "car") == 0){	
-									//只要大于之前的数据百分值，就需要重新更新数据
-									if(percent>percentage_best){
-										percentage_best=percent;
-										identfFrameInfo->fPercentage=percent;
-										if(identfFrameInfo->strIdentfName&&strlen(name)>strlen(identfFrameInfo->strIdentfName)){
-											free(identfFrameInfo->strIdentfName);
-											identfFrameInfo->strIdentfName=NULL;
-										}
-										if(!identfFrameInfo->strIdentfName){
-											identfFrameInfo->strIdentfName=av_mallocz_array(strlen(name)+1,sizeof(char));
-										}
-										memcpy(identfFrameInfo->strIdentfName,name,strlen(name));
-										//读取矩形框对角线坐标
-										identfFrameInfo->struBoxPnt.nX1=cJSON_GetArrayItem(jsonBoxObj,0)->valueint;
-										identfFrameInfo->struBoxPnt.nY1=cJSON_GetArrayItem(jsonBoxObj,1)->valueint;
-										identfFrameInfo->struBoxPnt.nX2=cJSON_GetArrayItem(jsonBoxObj,2)->valueint;
-										identfFrameInfo->struBoxPnt.nY2=cJSON_GetArrayItem(jsonBoxObj,3)->valueint;
-									}
-								}															
-							}
-						}					
-					}	
+				IdentfFrameInfo *identfFrameInfo = &dcctx->identfFrame[i];
+				identfFrameInfo->nFrameIndex=i;
+				if(cJSON_IsObject(jsonFrame)&&
+					cJSON_HasObjectItem(jsonFrame,"frame_index")&&
+					cJSON_HasObjectItem(jsonFrame,"box")){
+					cJSON* jsonFrameIndexObj = cJSON_GetObjectItem(jsonFrame,"frame_index");
+					cJSON* jsonCropBox = cJSON_GetObjectItem(jsonFrame,"box");
+					if(jsonFrameIndexObj&&jsonCropBox
+						&& i == jsonFrameIndexObj->valueint){
+						//读取矩形框对角线坐标
+						identfFrameInfo->struBoxPnt.nW = cJSON_GetArrayItem(jsonCropBox,0)->valueint;
+						identfFrameInfo->struBoxPnt.nH = cJSON_GetArrayItem(jsonCropBox,1)->valueint;
+						identfFrameInfo->struBoxPnt.nX1 = cJSON_GetArrayItem(jsonCropBox,2)->valueint;
+						identfFrameInfo->struBoxPnt.nY1 = cJSON_GetArrayItem(jsonCropBox,3)->valueint;
+					}else{
+						av_log(dcctx, AV_LOG_ERROR,"the json frame index:%d error.\n",i);
+					}
 				}				
 			}
 			ret=0;
@@ -506,20 +482,22 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
         frame->data[3] += crop_y * frame->linesize[3];
         frame->data[3] += crop_x * s->max_step[3];
     }
+	av_log(ctx, AV_LOG_TRACE, "src:w:%d,h:%d,link:w:%d,h:%d,crop:w:%d,h:%d,out:w:%d,h:%d\n",
+		frame->width,frame->height,link->w,link->h,crop_w,crop_h,out_w,out_h);
 	//更改一下图像的宽高
 	frame->width=crop_w;
 	frame->height=crop_h;
 	
 	//裁剪完毕以后，需要加入scale滤镜处理
 	//先需要分配一帧输出的数据缓存
-	out = ff_get_video_buffer(link, link->w, link->h);
+	out = ff_get_video_buffer(link, out_w, out_h);
     if (!out) {
         ret = AVERROR(ENOMEM);
         return ret;
     }
 	s->sws = sws_alloc_context();
     if (!s->sws) {
-		av_log(ctx, AV_LOG_ERROR, "alloc sws context failed\n",);
+		av_log(ctx, AV_LOG_ERROR, "alloc sws context failed\n");
         ret = AVERROR(ENOMEM);
         goto error;
     }
@@ -534,15 +512,18 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     if ((ret = sws_init_context(s->sws, NULL, NULL)) < 0)
         goto error;
 
-    sws_scale(s->sws, (const uint8_t *const *)frame->data, frame->datalinesize, 0, frame->height, out->data, out->linesize);
+    sws_scale(s->sws, (const uint8_t *const *)frame->data, frame->linesize, 0, frame->height, out->data, out->linesize);
 	//释放资源
 	sws_freeContext(s->sws);
 	s->sws = NULL;
-
+	//在释放帧数据信息之前，我们需要拷贝一下之前的数据信息
+	out->pts = frame->pts;
+	out->pkt_dts = frame->pkt_dts;
 	av_frame_free(&frame);
 	frame=NULL;
 	//更新一下
 	frame=out;
+	av_log(ctx, AV_LOG_TRACE, "out frame:w:%d,h:%d,pts:%lld,dts:%lld\n",frame->width,frame->height,frame->pts,frame->pkt_dts);
 
     return ff_filter_frame(link->dst->outputs[0], frame);
 error:
