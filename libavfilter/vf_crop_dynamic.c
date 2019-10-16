@@ -81,6 +81,8 @@ typedef struct __tagBoxPoint{
 	int nY1;
 	int nX2;
 	int nY2;
+	int nW;
+	int nH;
 }BoxPoint;
 
 //从json文件中获取的识别帧信息内容
@@ -111,6 +113,7 @@ typedef struct DynamicCropContext {
 	IdentfFrameInfo* identfFrame;
 	int  identfFrameSize;
 	long frameIndex;
+	struct SwsContext *sws;
 } DynamicCropContext;
 
 //解析json数据文件格式
@@ -174,15 +177,15 @@ static int parse_json_file(DynamicCropContext* dcctx,char* file_name){
 						if(jsonObj==NULL||!cJSON_IsObject(jsonObj)){
 							continue;
 						}
+						IdentfFrameInfo *identfFrameInfo = &dcctx->identfFrame[i];
+						identfFrameInfo->nFrameIndex=i;											
 						if(cJSON_HasObjectItem(jsonObj,"name")&&
 							cJSON_HasObjectItem(jsonObj,"percentage_probability")&&
 							cJSON_HasObjectItem(jsonObj,"box_points")){
 							cJSON* jsonNameObj=cJSON_GetObjectItem(jsonObj,"name");
 							cJSON* jsonPercentObj=cJSON_GetObjectItem(jsonObj,"percentage_probability");
 							cJSON* jsonBoxObj=cJSON_GetObjectItem(jsonObj,"box_points");
-							if(jsonNameObj&&jsonPercentObj&&jsonBoxObj&&cJSON_IsArray(jsonBoxObj)){
-								IdentfFrameInfo *identfFrameInfo = &dcctx->identfFrame[i];
-								identfFrameInfo->nFrameIndex=i;
+							if(jsonNameObj&&jsonPercentObj&&jsonBoxObj&&cJSON_IsArray(jsonBoxObj)){							
 								//读取对应的值
 								float percent = (float)jsonPercentObj->valuedouble;
 								char* name = jsonNameObj->valuestring;
@@ -209,7 +212,7 @@ static int parse_json_file(DynamicCropContext* dcctx,char* file_name){
 									}
 								}															
 							}
-						}						
+						}					
 					}	
 				}				
 			}
@@ -419,79 +422,136 @@ static int filter_frame(AVFilterLink *link, AVFrame *frame)
     AVFilterContext *ctx = link->dst;
     DynamicCropContext *s = ctx->priv;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(link->format);
-    int i;
+    int i=0;
+	AVFrame *out=NULL;
+	int out_w=0,out_h=0;
+	int crop_w=0,crop_h=0;
+	int crop_x=0,crop_y=0;
+	int ret=0;
 
-    frame->width  = s->w;
-    frame->height = s->h;
-	int json_x=0,json_y=0;
+	//初始化
+	out_w = s->w;
+	out_h = s->h;
+    crop_w  = s->w;
+    crop_h  = s->h;
+	crop_x = s->x;
+	crop_y = s->y;
+	
 	//从解析到的数据结构中取对应帧数据的起始位置
 	if(s->identfFrame&&s->identfFrameSize>0){
 		IdentfFrameInfo *identfFrameInfo = &s->identfFrame[s->frameIndex];
 		if(identfFrameInfo){
-			json_x=identfFrameInfo->struBoxPnt.nX1;
-			json_y=identfFrameInfo->struBoxPnt.nY1;		
-			s->var_values[VAR_X]=json_x;
-   			s->var_values[VAR_Y]=json_y;			
-			av_log(ctx, AV_LOG_TRACE,"the identf frame info:x:%d,y:%d,percent:%f,name:%s",json_x,json_y,identfFrameInfo->fPercentage,identfFrameInfo->strIdentfName);
+			crop_x = identfFrameInfo->struBoxPnt.nX1;
+			crop_y = identfFrameInfo->struBoxPnt.nY1;
+			crop_w = identfFrameInfo->struBoxPnt.nW;
+			crop_h = identfFrameInfo->struBoxPnt.nH;
+			s->var_values[VAR_X]=crop_x;
+   			s->var_values[VAR_Y]=crop_y;			
+			av_log(ctx, AV_LOG_TRACE,"the identf frame info:x:%d,y:%d,w=%d,h=%d,percent:%f,name:%s",
+				crop_x,crop_y,crop_w,crop_h,identfFrameInfo->fPercentage,identfFrameInfo->strIdentfName);
 		}	
 	}else{
 		s->var_values[VAR_X] = av_expr_eval(s->x_pexpr, s->var_values, NULL);
 		s->var_values[VAR_Y] = av_expr_eval(s->y_pexpr, s->var_values, NULL);
 		/* It is necessary if x is expressed from y	*/
 		s->var_values[VAR_X] = av_expr_eval(s->x_pexpr, s->var_values, NULL);
+		
 	}
 	s->frameIndex++;
 	
-
     s->var_values[VAR_N] = link->frame_count_out;
-    s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?
-        NAN : frame->pts * av_q2d(link->time_base);
-    s->var_values[VAR_POS] = frame->pkt_pos == -1 ?
-        NAN : frame->pkt_pos;
+    s->var_values[VAR_T] = frame->pts == AV_NOPTS_VALUE ?NAN : frame->pts * av_q2d(link->time_base);
+    s->var_values[VAR_POS] = frame->pkt_pos == -1 ?NAN : frame->pkt_pos;
   
 
-    normalize_double(&s->x, s->var_values[VAR_X]);
-    normalize_double(&s->y, s->var_values[VAR_Y]);
+    normalize_double(&crop_x, s->var_values[VAR_X]);
+    normalize_double(&crop_y, s->var_values[VAR_Y]);
 
-    if (s->x < 0)
-        s->x = 0;
-    if (s->y < 0)
-        s->y = 0;
-    if ((unsigned)s->x + (unsigned)s->w > link->w)
-        s->x = link->w - s->w;
-    if ((unsigned)s->y + (unsigned)s->h > link->h)
-        s->y = link->h - s->h;
+    if (crop_x < 0)
+        crop_x = 0;
+    if (crop_y < 0)
+        crop_y = 0;
+    if ((unsigned)crop_x + (unsigned)crop_w > link->w)
+        crop_x = link->w - crop_w;
+    if ((unsigned)crop_y + (unsigned)crop_h > link->h)
+        crop_y = link->h - crop_h;
     if (!s->exact) {
-        s->x &= ~((1 << s->hsub) - 1);
-        s->y &= ~((1 << s->vsub) - 1);
+        crop_x &= ~((1 << s->hsub) - 1);
+        crop_x &= ~((1 << s->vsub) - 1);
     }
+	s->x = crop_x;
+	s->y = crop_y;
 
     av_log(ctx, AV_LOG_TRACE, "n:%d t:%f pos:%f x:%d y:%d x+w:%d y+h:%d\n",
             (int)s->var_values[VAR_N], s->var_values[VAR_T], s->var_values[VAR_POS],
-            s->x, s->y, s->x+s->w, s->y+s->h);
+            crop_x, crop_y, crop_x+crop_w, crop_y+crop_h);
 	//添加一个打印语句
 	 av_log(ctx, AV_LOG_TRACE, "the frame display num:%d,pts:%f,fmt:%d\n",
             frame->display_picture_number,frame->pts == AV_NOPTS_VALUE ?NAN : frame->pts * av_q2d(link->time_base),frame->format);
 
-    frame->data[0] += s->y * frame->linesize[0];
-    frame->data[0] += s->x * s->max_step[0];
+    frame->data[0] += crop_y * frame->linesize[0];
+    frame->data[0] += crop_x * s->max_step[0];
 
     if (!(desc->flags & AV_PIX_FMT_FLAG_PAL || desc->flags & FF_PSEUDOPAL)) {
         for (i = 1; i < 3; i ++) {
             if (frame->data[i]) {
-                frame->data[i] += (s->y >> s->vsub) * frame->linesize[i];
-                frame->data[i] += (s->x * s->max_step[i]) >> s->hsub;
+                frame->data[i] += (crop_y >> s->vsub) * frame->linesize[i];
+                frame->data[i] += (crop_x * s->max_step[i]) >> s->hsub;
             }
         }
     }
 
     /* alpha plane */
     if (frame->data[3]) {
-        frame->data[3] += s->y * frame->linesize[3];
-        frame->data[3] += s->x * s->max_step[3];
+        frame->data[3] += crop_y * frame->linesize[3];
+        frame->data[3] += crop_x * s->max_step[3];
     }
+	//更改一下图像的宽高
+	frame->width=crop_w;
+	frame->height=crop_h;
+	
+	//裁剪完毕以后，需要加入scale滤镜处理
+	//先需要分配一帧输出的数据缓存
+	out = ff_get_video_buffer(link, link->w, link->h);
+    if (!out) {
+        ret = AVERROR(ENOMEM);
+        return ret;
+    }
+	s->sws = sws_alloc_context();
+    if (!s->sws) {
+		av_log(ctx, AV_LOG_ERROR, "alloc sws context failed\n",);
+        ret = AVERROR(ENOMEM);
+        goto error;
+    }
+	av_opt_set_int(s->sws, "srcw", frame->width, 0);
+    av_opt_set_int(s->sws, "srch", frame->height, 0);
+    av_opt_set_int(s->sws, "src_format", frame->format, 0);
+    av_opt_set_int(s->sws, "dstw", out_w, 0);
+    av_opt_set_int(s->sws, "dsth", out_h, 0);
+    av_opt_set_int(s->sws, "dst_format", frame->format, 0);
+    av_opt_set_int(s->sws, "sws_flags", SWS_BICUBIC, 0);
+
+    if ((ret = sws_init_context(s->sws, NULL, NULL)) < 0)
+        goto error;
+
+    sws_scale(s->sws, (const uint8_t *const *)frame->data, frame->datalinesize, 0, frame->height, out->data, out->linesize);
+	//释放资源
+	sws_freeContext(s->sws);
+	s->sws = NULL;
+
+	av_frame_free(&frame);
+	frame=NULL;
+	//更新一下
+	frame=out;
 
     return ff_filter_frame(link->dst->outputs[0], frame);
+error:
+	av_log(ctx, AV_LOG_ERROR, " error:%d\n",ret);
+	if(out){
+		av_frame_free(&out);
+		out=NULL;
+	}
+	return ret;	
 }
 
 static int process_command(AVFilterContext *ctx, const char *cmd, const char *args,
