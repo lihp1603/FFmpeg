@@ -1604,21 +1604,26 @@ retry:
             /* dequeue the picture */
             lastvp = frame_queue_peek_last(&is->pictq);
             vp = frame_queue_peek(&is->pictq);
-
+			av_log(NULL, AV_LOG_TRACE, "video lastvp:pts:%f,serial:%d,vp:pts:%f,serial:%d,is->videoq.serial:%d\n",lastvp->pts,lastvp->serial,vp->pts,vp->serial,is->videoq.serial);
+			
             if (vp->serial != is->videoq.serial) {
                 frame_queue_next(&is->pictq);
                 goto retry;
             }
 
-            if (lastvp->serial != vp->serial)
+            if (lastvp->serial != vp->serial){
                 is->frame_timer = av_gettime_relative() / 1000000.0;
+				//添加一个调试
+				av_log(NULL, AV_LOG_TRACE, "video lastvp serial:%d,vp serial:%d; frame timer: %f\n",lastvp->serial , vp->serial,is->frame_timer);
+            }
 
             if (is->paused)
                 goto display;
 
             /* compute nominal last_duration */
-            last_duration = vp_duration(is, lastvp, vp);
+            last_duration = vp_duration(is, lastvp, vp);			
             delay = compute_target_delay(last_duration, is);
+			av_log(NULL, AV_LOG_TRACE, "video last_duration:%f,delay:%f\n",last_duration,delay);
 
             time= av_gettime_relative()/1000000.0;
             if (time < is->frame_timer + delay) {
