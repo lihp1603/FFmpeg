@@ -415,6 +415,7 @@ OBJS-$(CONFIG_ZSCALE_FILTER)                 += vf_zscale.o
 OBJS-$(CONFIG_GLTRANSITION_FILTER)           += vf_gltransition.o
 OBJS-$(CONFIG_GBLUREX_FILTER)                += vf_gblurex.o
 OBJS-$(CONFIG_CROP_DYNAMIC_FILTER)           += vf_crop_dynamic.o cJSON.o 
+OBJS-$(CONFIG_KEYFRAMES_FILTER)              += vf_keyframes.o cJSON.o framesync.o
 
 OBJS-$(CONFIG_ALLRGB_FILTER)                 += vsrc_testsrc.o
 OBJS-$(CONFIG_ALLYUV_FILTER)                 += vsrc_testsrc.o
