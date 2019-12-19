@@ -1412,6 +1412,60 @@ error:
 	return ret;	
 }
 
+static int ScaleFuction2(AVFilterContext *ctx,AVFilterLink *inlink2,AVFrame *src,AVFrame** dest,int destOutW,int destOutH,int destOutFmt){
+	int scaleOutW = destOutW;
+	int scaleOutH = destOutH;
+	AVFrame *scale_out=NULL;
+	int ret=0;
+	KeyframesContext *s = ctx->priv;
+	//先需要分配一帧输出的数据缓存
+	scale_out = ff_get_video_buffer(inlink2, scaleOutW, scaleOutH);
+	if (!scale_out) {
+		ret = AVERROR(ENOMEM);
+		return ret;
+	}
+	s->pSwsCtx= sws_alloc_context();
+	if (!s->pSwsCtx) {
+		av_log(ctx, AV_LOG_ERROR, "alloc sws context failed\n");
+		ret = AVERROR(ENOMEM);
+		goto error;
+	}
+	av_opt_set_int(s->pSwsCtx, "srcw", src->width, 0);
+	av_opt_set_int(s->pSwsCtx, "srch", src->height, 0);
+	av_opt_set_int(s->pSwsCtx, "src_format", src->format, 0);
+	av_opt_set_int(s->pSwsCtx, "dstw", scaleOutW, 0);
+	av_opt_set_int(s->pSwsCtx, "dsth", scaleOutH, 0);
+	av_opt_set_int(s->pSwsCtx, "dst_format", destOutFmt, 0);
+	av_opt_set_int(s->pSwsCtx, "sws_flags", SWS_BICUBIC, 0);
+	
+	if ((ret = sws_init_context(s->pSwsCtx, NULL, NULL)) < 0)
+		goto error;
+	
+	sws_scale(s->pSwsCtx, (const uint8_t *const *)src->data, src->linesize, 0, src->height, scale_out->data, scale_out->linesize);
+	//释放资源
+	sws_freeContext(s->pSwsCtx);
+	s->pSwsCtx = NULL;
+	//
+	//在释放帧数据信息之前，我们需要拷贝一下之前的数据信息
+	scale_out->pts = src->pts;
+	scale_out->pkt_dts = src->pkt_dts;
+	scale_out->best_effort_timestamp = src->best_effort_timestamp;
+	//不需要释放内存
+	//av_frame_free(&src);
+	//src=NULL;
+	//更新一下
+	*dest=scale_out;
+	return ret;
+error:
+	av_log(ctx, AV_LOG_ERROR, " error:%d\n",ret);
+	if(scale_out){
+		av_frame_free(&scale_out);
+		scale_out=NULL;
+	}
+	return ret;	
+}
+
+
 //这里自己写一个帧拷贝函数
 static int avframe_copy(AVFilterLink *inlink,AVFrame* in,AVFrame** out){
 	int ret =0;
@@ -1504,13 +1558,14 @@ static int do_blend(FFFrameSync *fs)
 			av_log(ctx, AV_LOG_WARNING, "second frame height:%d,scale:%f,so scaleout height:%d is odd\n",second->height,scale,scaleOutH);
 			scaleOutH+=1;
 		}
+		/*
 		//在这里我们对这个帧进行一次数据拷贝 
 		ret = avframe_copy(inlink2,second,&second_out);
 		if (ret < 0) {
 			av_log(ctx, AV_LOG_ERROR, "second frame copy failed:%d\n",ret);
 		    second = NULL;
 		    return ret;
-		}		
+		}	
 		
 		if((ret=ScaleFuction(ctx,inlink2,second_out,&scale_out,scaleOutW,scaleOutH,second->format))<0){
 			av_log(ctx, AV_LOG_ERROR,"frame index:%lld scale failed,scale out:w:%d,h:%d\n",s->llFrameIndex,scaleOutW,scaleOutH);
@@ -1519,6 +1574,16 @@ static int do_blend(FFFrameSync *fs)
 		//在赋值回去
 		second = scale_out;
 		second_out = scale_out;//我们开辟的内存需要释放，在处理完以后
+		*/
+
+		//如果不进行数据拷贝的话，我们需要修改ScalseFunction,不应该在这个函数里面释放second这个对象的内存，否则会出现崩溃
+		if((ret=ScaleFuction2(ctx,inlink2,second,&second_out,scaleOutW,scaleOutH,second->format))<0){
+			av_log(ctx, AV_LOG_ERROR,"frame index:%lld scale failed,scale out:w:%d,h:%d\n",s->llFrameIndex,scaleOutW,scaleOutH);
+			goto error;
+		}
+		//赋值
+		second = second_out;
+		
 	}
 
 	s->llFrameIndex++;//用于帧计算用
@@ -1545,8 +1610,13 @@ static int do_blend(FFFrameSync *fs)
 			goto error;
 	}
 	if(mainpic->width != s->out_w||mainpic->height != s->out_h){
-		if((ret=ScaleFuction(ctx,inlink,mainpic,&scale_out,s->out_w,s->out_h,mainpic->format))<0){
+		if((ret=ScaleFuction2(ctx,inlink,mainpic,&scale_out,s->out_w,s->out_h,mainpic->format))<0){
 			goto error;
+		}
+		//在外面进行内存的释放
+		if(mainpic){
+			av_frame_free(&mainpic);
+			mainpic=NULL;
 		}
 		mainpic = scale_out;
 	}
@@ -1581,6 +1651,7 @@ static int activate(AVFilterContext *ctx)
     return ff_framesync_activate(&s->fs);
 }
 
+//这个函数根本不会被调用到
 static int filter_frame_overlay(AVFilterLink *inlink, AVFrame *in){
 	AVFilterContext *ctx = inlink->dst;
     KeyframesContext *s = ctx->priv;
