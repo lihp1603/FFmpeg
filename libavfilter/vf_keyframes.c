@@ -1360,7 +1360,7 @@ static int CropFuction(AVFilterContext *ctx,AVFilterLink *inlink,AVFrame *frame,
 }
 
 //对图像进行宿放
-static int ScaleFuction(AVFilterContext *ctx,AVFilterLink *inlink2,AVFrame *second,int destOutW,int destOutH,int destOutFmt){
+static int ScaleFuction(AVFilterContext *ctx,AVFilterLink *inlink2,AVFrame *src,AVFrame** dest,int destOutW,int destOutH,int destOutFmt){
 	int scaleOutW = destOutW;
 	int scaleOutH = destOutH;
 	AVFrame *scale_out=NULL;
@@ -1378,9 +1378,9 @@ static int ScaleFuction(AVFilterContext *ctx,AVFilterLink *inlink2,AVFrame *seco
 		ret = AVERROR(ENOMEM);
 		goto error;
 	}
-	av_opt_set_int(s->pSwsCtx, "srcw", second->width, 0);
-	av_opt_set_int(s->pSwsCtx, "srch", second->height, 0);
-	av_opt_set_int(s->pSwsCtx, "src_format", second->format, 0);
+	av_opt_set_int(s->pSwsCtx, "srcw", src->width, 0);
+	av_opt_set_int(s->pSwsCtx, "srch", src->height, 0);
+	av_opt_set_int(s->pSwsCtx, "src_format", src->format, 0);
 	av_opt_set_int(s->pSwsCtx, "dstw", scaleOutW, 0);
 	av_opt_set_int(s->pSwsCtx, "dsth", scaleOutH, 0);
 	av_opt_set_int(s->pSwsCtx, "dst_format", destOutFmt, 0);
@@ -1389,18 +1389,19 @@ static int ScaleFuction(AVFilterContext *ctx,AVFilterLink *inlink2,AVFrame *seco
 	if ((ret = sws_init_context(s->pSwsCtx, NULL, NULL)) < 0)
 		goto error;
 	
-	sws_scale(s->pSwsCtx, (const uint8_t *const *)second->data, second->linesize, 0, second->height, scale_out->data, scale_out->linesize);
+	sws_scale(s->pSwsCtx, (const uint8_t *const *)src->data, src->linesize, 0, src->height, scale_out->data, scale_out->linesize);
 	//释放资源
 	sws_freeContext(s->pSwsCtx);
 	s->pSwsCtx = NULL;
 	//
 	//在释放帧数据信息之前，我们需要拷贝一下之前的数据信息
-	scale_out->pts = second->pts;
-	scale_out->pkt_dts = second->pkt_dts;
-	av_frame_free(&second);
-	second=NULL;
+	scale_out->pts = src->pts;
+	scale_out->pkt_dts = src->pkt_dts;
+	av_frame_free(&src);
+	src=NULL;
+	
 	//更新一下
-	second=scale_out;
+	*dest=scale_out;
 	return ret;
 error:
 	av_log(ctx, AV_LOG_ERROR, " error:%d\n",ret);
@@ -1414,16 +1415,14 @@ error:
 //这里自己写一个帧拷贝函数
 static int avframe_copy(AVFilterLink *inlink,AVFrame* in,AVFrame** out){
 	int ret =0;
-	AVFrame* out2 = ff_get_video_buffer(inlink, inlink->w, inlink->h);
+	AVFrame* out2 = av_frame_clone(in);
     if (!out2) {
        return AVERROR(ENOMEM);
     }
-    //av_frame_copy_props(out2, in);
-	//av_image_copy(out2->data, out2->linesize, in->data, in->linesize,in->format, in->width, in->height);
-	ret=av_frame_copy(out2,in);
+	/*ret=av_frame_copy(out2,in);
 	if(ret<0){
 		return ret;
-	}
+	}*/
 	*out =out2;
 	return ret;
 }
@@ -1443,6 +1442,7 @@ static int do_blend(FFFrameSync *fs)
 	int scaleOutW,scaleOutH;
 	AVFilterLink *inlink2 = ctx->inputs[1];
 	AVFrame *second_out=NULL;
+	AVFrame *scale_out=NULL;
 	//这里需要注意，我们获取的两个frame数据，其中second是not writeable的，也就是说底下进行缓存
 	//如果我们在上层自己对这个帧数据处理的话，在这里可能会出现一些其他的问题，例如崩溃啥的情况
     ret = ff_framesync_dualinput_get_writable(fs, &mainpic, &second);
@@ -1489,7 +1489,7 @@ static int do_blend(FFFrameSync *fs)
 		av_log(ctx, AV_LOG_TRACE,"the frame index:%d,scale:%f,overlay pos:x:%d,y:%d,crop box:w:%d,h:%d,x:%d,y:%d\n",
 			frame_index,scale,struOverlayPos.nX,struOverlayPos.nY,struCropBox.nW,struCropBox.nH,struCropBox.struLeftTop.nX,struCropBox.struLeftTop.nY);
 	}
-	#if 0
+	#if 1
 	//根据scale的值对overlay的frame进行scale
 	if(scale!=1.0){
 		av_log(ctx,AV_LOG_TRACE,"do blend scale\n");
@@ -1512,12 +1512,13 @@ static int do_blend(FFFrameSync *fs)
 		    return ret;
 		}		
 		
-		if((ret=ScaleFuction(ctx,inlink2,second_out,scaleOutW,scaleOutH,second->format))<0){
+		if((ret=ScaleFuction(ctx,inlink2,second_out,&scale_out,scaleOutW,scaleOutH,second->format))<0){
 			av_log(ctx, AV_LOG_ERROR,"frame index:%lld scale failed,scale out:w:%d,h:%d\n",s->llFrameIndex,scaleOutW,scaleOutH);
 			goto error;
 		}
 		//在赋值回去
-		second = second_out;
+		second = scale_out;
+		second_out = scale_out;//我们开辟的内存需要释放，在处理完以后
 	}
 
 	s->llFrameIndex++;//用于帧计算用
@@ -1544,15 +1545,16 @@ static int do_blend(FFFrameSync *fs)
 			goto error;
 	}
 	if(mainpic->width != s->out_w||mainpic->height != s->out_h){
-		if((ret=ScaleFuction(ctx,inlink,mainpic,s->out_w,s->out_h,mainpic->format))<0){
+		if((ret=ScaleFuction(ctx,inlink,mainpic,&scale_out,s->out_w,s->out_h,mainpic->format))<0){
 			goto error;
-		}		
+		}
+		mainpic = scale_out;
 	}
 	//需要释放拷贝的帧数据
-	//if(second_out){
-	//	av_frame_free(&second_out);
-	//	second_out=NULL;
-	//}
+	if(second_out){
+		av_frame_free(&second_out);
+		second_out=NULL;
+	}
 	av_log(ctx,AV_LOG_TRACE,"do blend end\n");
     return ff_filter_frame(ctx->outputs[0], mainpic);
 error:
@@ -1585,6 +1587,7 @@ static int filter_frame_overlay(AVFilterLink *inlink, AVFrame *in){
     AVFilterLink *outlink = ctx->outputs[1];
 	int ret =0;
     AVFrame *out=NULL;
+	AVFrame *scale_out=NULL;
     float scale =1.0;
 	int scaleOutW=0,scaleOutH=0;
 	av_log(ctx, AV_LOG_TRACE,"start processing overlay frame");
@@ -1629,9 +1632,10 @@ static int filter_frame_overlay(AVFilterLink *inlink, AVFrame *in){
 			scaleOutH+=1;
 		}	
 		
-		if((ret=ScaleFuction(ctx,outlink,out,scaleOutW,scaleOutH,out->format))<0){
+		if((ret=ScaleFuction(ctx,outlink,out,&scale_out,scaleOutW,scaleOutH,out->format))<0){
 			av_log(ctx, AV_LOG_ERROR,"frame index:%lld scale failed,scale out:w:%d,h:%d\n",s->llFrameIndex,scaleOutW,scaleOutH);
 		}
+		out = scale_out;
 	}
 
 	if (out != in){
@@ -1687,7 +1691,7 @@ static const AVFilterPad avfilter_vf_keyframes_inputs[] = {
         .name         = "overlay",
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_input_overlay,
-        .filter_frame = filter_frame_overlay,
+        //.filter_frame = filter_frame_overlay,
     },
     { NULL }
 };
