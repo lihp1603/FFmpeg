@@ -240,14 +240,15 @@ static int av_buffersrc_add_frame_internal(AVFilterContext *ctx,
             return ret;
         }
     }
-
+	//写入缓存队列中
     if ((ret = av_fifo_generic_write(s->fifo, &copy, sizeof(copy), NULL)) < 0) {
         if (refcounted)
             av_frame_move_ref(frame, copy);
         av_frame_free(&copy);
         return ret;
     }
-
+	//调用自己的request_frame函数
+	//同时注意这里的link，调用的是buffer这个avfilterContext的output的link
     if ((ret = ctx->output_pads[0].request_frame(ctx->outputs[0])) < 0)
         return ret;
 
@@ -466,8 +467,9 @@ static int request_frame(AVFilterLink *link)
         c->nb_failed_requests++;
         return AVERROR(EAGAIN);
     }
+	//从缓冲队列中读取帧数据
     av_fifo_generic_read(c->fifo, &frame, sizeof(frame), NULL);
-
+	//开始调用filter_frame函数;接触第一个link，介于buffer这个avfiltercontext和下一个之间的link
     ret = ff_filter_frame(link, frame);
 
     return ret;

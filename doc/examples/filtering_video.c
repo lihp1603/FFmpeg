@@ -244,6 +244,7 @@ int main(int argc, char **argv)
             }
 
             while (ret >= 0) {
+				//接收解码器吐出来的数据
                 ret = avcodec_receive_frame(dec_ctx, frame);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
                     break;
@@ -253,7 +254,7 @@ int main(int argc, char **argv)
                 }
 
                 frame->pts = frame->best_effort_timestamp;
-
+				//对解码的帧数据，送入buffer滤镜
                 /* push the decoded frame into the filtergraph */
                 if (av_buffersrc_add_frame_flags(buffersrc_ctx, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
                     av_log(NULL, AV_LOG_ERROR, "Error while feeding the filtergraph\n");
@@ -262,6 +263,7 @@ int main(int argc, char **argv)
 
                 /* pull filtered frames from the filtergraph */
                 while (1) {
+					//从buffersink获取帧数据，然后送显示或者送编码器都是可以的
                     ret = av_buffersink_get_frame(buffersink_ctx, filt_frame);
                     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
                         break;
