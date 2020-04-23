@@ -2383,6 +2383,7 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
     }
 
     update_benchmark(NULL);
+	//直接送解码器解码
     ret = decode(ist->dec_ctx, decoded_frame, got_output, pkt ? &avpkt : NULL);
     update_benchmark("decode_video %d.%d", ist->file_index, ist->st->index);
     if (ret < 0)
@@ -2426,7 +2427,7 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
     if(ist->top_field_first>=0)
         decoded_frame->top_field_first = ist->top_field_first;
 
-    ist->frames_decoded++;
+    ist->frames_decoded++;//统计解码的视频帧数量
 
     if (ist->hwaccel_retrieve_data && decoded_frame->format == ist->hwaccel_pix_fmt) {
         err = ist->hwaccel_retrieve_data(ist->dec_ctx, decoded_frame);
@@ -2449,6 +2450,7 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
         ist->nb_dts_buffer--;
     }
 
+	//更新ist下个帧的pts
     if(best_effort_timestamp != AV_NOPTS_VALUE) {
         int64_t ts = av_rescale_q(decoded_frame->pts = best_effort_timestamp, ist->st->time_base, AV_TIME_BASE_Q);
 
@@ -2469,7 +2471,7 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
 
     if (ist->st->sample_aspect_ratio.num)
         decoded_frame->sample_aspect_ratio = ist->st->sample_aspect_ratio;
-
+	//将解码后的帧数据送给filter
     err = send_frame_to_filters(ist, decoded_frame);
 
 fail:
@@ -4266,12 +4268,14 @@ static int process_input(int file_index)
     int64_t pkt_dts;
 
     is  = ifile->ctx;
+	//读取数据帧
     ret = get_input_packet(ifile, &pkt);
 
     if (ret == AVERROR(EAGAIN)) {
         ifile->eagain = 1;
         return ret;
     }
+	//这里是处理当我们需要循环处理输入数据，例如循环推流通一个视频文件，图片转视频等设置loop的时候
     if (ret < 0 && ifile->loop) {
         AVCodecContext *avctx;
         for (i = 0; i < ifile->nb_streams; i++) {
@@ -4302,6 +4306,7 @@ static int process_input(int file_index)
             return ret;
         }
     }
+	//处理读数据出错，或者读取到了结尾部分的时候
     if (ret < 0) {
         if (ret != AVERROR_EOF) {
             print_error(is->url, ret);
@@ -4347,7 +4352,7 @@ static int process_input(int file_index)
     ist = input_streams[ifile->ist_index + pkt.stream_index];
 
     ist->data_size += pkt.size;
-    ist->nb_packets++;
+    ist->nb_packets++;//数据包计数
 
     if (ist->discard)
         goto discard_packet;
@@ -4514,7 +4519,19 @@ static int process_input(int file_index)
 
     sub2video_heartbeat(ist, pkt.pts);
 
-    process_input_packet(ist, &pkt, 0);
+	//针对截图，需要再这里添加处理过程，只对关键帧送数据进解码器
+	if(ist->dec_ctx->codec_type==AVMEDIA_TYPE_VIDEO&&ifile->force_discard_video_nonkey>0){
+		if(!!(pkt.flags&AV_PKT_FLAG_KEY)){
+			av_log(NULL, AV_LOG_DEBUG, "decode send keyframe\n");
+			process_input_packet(ist, &pkt, 0);
+		}else{
+			av_log(NULL, AV_LOG_DEBUG, "drop non keyframe\n");
+			av_packet_unref(&pkt);
+			return AVERROR(EAGAIN);
+		}
+	}else{
+    	process_input_packet(ist, &pkt, 0);
+	}
 
 discard_packet:
     av_packet_unref(&pkt);
@@ -4633,7 +4650,7 @@ static int transcode_step(void)
         av_assert0(ost->source_index >= 0);
         ist = input_streams[ost->source_index];
     }
-
+	//处理输入数据
     ret = process_input(ist->file_index);
     if (ret == AVERROR(EAGAIN)) {
         if (input_files[ist->file_index]->eagain)

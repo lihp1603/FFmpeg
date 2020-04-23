@@ -230,6 +230,8 @@ typedef struct OptionsContext {
     int        nb_time_bases;
     SpecifierOpt *enc_time_bases;
     int        nb_enc_time_bases;
+	//新增一个参数
+	int force_discard_video_nonkey;//表示强制丢掉视频的非关键帧
 } OptionsContext;
 
 typedef struct InputFilter {
@@ -411,6 +413,8 @@ typedef struct InputFile {
     int nb_streams_warn;  /* number of streams that the user was warned of */
     int rate_emu;
     int accurate_seek;
+	//新增
+	int force_discard_video_nonkey;
 
 #if HAVE_THREADS
     AVThreadMessageQueue *in_thread_queue;

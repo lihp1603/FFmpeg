@@ -1189,6 +1189,7 @@ static int open_input_file(OptionsContext *o, const char *filename)
     f->loop = o->loop;
     f->duration = 0;
     f->time_base = (AVRational){ 1, 1 };
+	f->force_discard_video_nonkey = o->force_discard_video_nonkey;
 #if HAVE_THREADS
     f->thread_queue_size = o->thread_queue_size > 0 ? o->thread_queue_size : 8;
 #endif
@@ -3707,6 +3708,8 @@ const OptionDef options[] = {
         "initialise hardware device", "args" },
     { "filter_hw_device", HAS_ARG | OPT_EXPERT, { .func_arg = opt_filter_hw_device },
         "set hardware device used when filtering", "device" },
-
+        
+	{ "fdv_nokey", OPT_INT | HAS_ARG | OPT_EXPERT | OPT_INPUT |
+						   OPT_OFFSET,									{ .off = OFFSET(force_discard_video_nonkey) }, "force discard of video non-keyframes", "" },
     { NULL, },
 };
