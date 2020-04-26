@@ -2439,11 +2439,11 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
 			if(ret<0){
 				av_log(ist->dec_ctx, AV_LOG_WARNING,"force discard nonkeyframes decode failed,previous packet size:%d.\n",pkt->size);
 				*decode_failed = 1;
-				break;
+				//break;
 			}
 			if(*got_output>0){
 				av_log(ist->dec_ctx, AV_LOG_DEBUG,"decode got frame got_output=%d,ret=%d\n",*got_output,ret);
-				break;
+				//break;
 			}
 		}
 		 
