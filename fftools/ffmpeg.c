@@ -2386,10 +2386,10 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
 	//添加一个参数，用于获取force_discard_video_nonkeyframes
 	int file_index = ist->file_index;
 	InputFile *ifile = input_files[file_index];
-	AVPacket avpkt_flush;
+	/*AVPacket avpkt_flush;
 	av_init_packet(&avpkt_flush);
 	avpkt_flush.data=NULL;
-	avpkt_flush.size=0;
+	avpkt_flush.size=0;*/
 
     // With fate-indeo3-2, we're getting 0-sized packets before EOF for some
     // reason. This seems like a semi-critical bug. Don't trigger EOF, and
@@ -2429,21 +2429,21 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
 	if(ist->dec_ctx->codec_type==AVMEDIA_TYPE_VIDEO
 		&&ifile&&ifile->force_discard_video_nonkey>0
 		&&pkt&&pkt->size >0&&!!(pkt->flags&&AV_PKT_FLAG_KEY)){
-		av_log(ist->dec_ctx, AV_LOG_INFO,"nb_packets:%d,packet size:%d,ret=%d,got_output=%d,pkt->flags:%d\n",ist->nb_packets,pkt->size,ret,*got_output,pkt->flags);
-		for(i=0;!*got_output&&i<10;i++){
+		av_log(ist->dec_ctx, AV_LOG_DEBUG,"nb_packets:%d,packet size:%d,ret=%d,got_output=%d,pkt->flags:%d\n",ist->nb_packets,pkt->size,ret,*got_output,pkt->flags);
+		{
 			//ret = decode(ist->dec_ctx, decoded_frame, got_output,  &avpkt_flush);
 			ret=decode_drain_mode(ist->dec_ctx, decoded_frame, got_output,  NULL);
-			av_log(ist->dec_ctx, AV_LOG_INFO,"decode ret=%d\n",ret);
+			av_log(ist->dec_ctx, AV_LOG_DEBUG,"decode ret=%d\n",ret);
 			//在drain mode后，如果想继续使用的话，就flush一下
 			avcodec_flush_buffers(ist->dec_ctx);
 			if(ret<0){
 				av_log(ist->dec_ctx, AV_LOG_WARNING,"force discard nonkeyframes decode failed,previous packet size:%d.\n",pkt->size);
 				*decode_failed = 1;
-				break;
+				//break;
 			}
 			if(*got_output>0){
-				av_log(ist->dec_ctx, AV_LOG_INFO,"decode got frame got_output=%d,ret=%d\n",*got_output,ret);
-				break;
+				av_log(ist->dec_ctx, AV_LOG_DEBUG,"decode got frame got_output=%d,ret=%d\n",*got_output,ret);
+				//break;
 			}
 		}
 		 
