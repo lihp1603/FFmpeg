@@ -91,7 +91,7 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     if (!img->is_pipe) {
         if (img->update) {
             av_strlcpy(filename, img->path, sizeof(filename));
-        } else if (img->use_strftime) {
+        } else if (img->use_strftime) { //当我们指定-strftime 1的时候，可以输出以当前时间格式的文件名
             time_t now0;
             struct tm *tm, tmpbuf;
             time(&now0);
@@ -100,7 +100,7 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
                 av_log(s, AV_LOG_ERROR, "Could not get frame filename with strftime\n");
                 return AVERROR(EINVAL);
             }
-        } else if (img->frame_pts) {
+        } else if (img->frame_pts) {//可以输出以帧的pts命名的文件
             if (av_get_frame_filename2(filename, sizeof(filename), img->path, pkt->pts, AV_FRAME_FILENAME_FLAGS_MULTIPLE) < 0) {
                 av_log(s, AV_LOG_ERROR, "Cannot write filename by pts of the frames.");
                 return AVERROR(EINVAL);
@@ -108,7 +108,7 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
         } else if (av_get_frame_filename2(filename, sizeof(filename), img->path,
                                           img->img_number,
                                           AV_FRAME_FILENAME_FLAGS_MULTIPLE) < 0 &&
-                   img->img_number > 1) {
+                   img->img_number > 1) {//这个就是我们以%d这种格式的 
             av_log(s, AV_LOG_ERROR,
                    "Could not get frame filename number %d from pattern '%s' (either set update or use a pattern like %%03d within the filename pattern)\n",
                    img->img_number, img->path);
@@ -183,15 +183,15 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     }
     avio_flush(pb[0]);
     if (!img->is_pipe) {
-        ff_format_io_close(s, &pb[0]);
+        ff_format_io_close(s, &pb[0]);//关闭输出文件
         for (i = 0; i < nb_renames; i++) {
-            int ret = ff_rename(img->tmp[i], img->target[i], s);
+            int ret = ff_rename(img->tmp[i], img->target[i], s);//重命名
             if (ret < 0)
                 return ret;
         }
     }
 
-    img->img_number++;
+    img->img_number++;//计数
     return 0;
 }
 

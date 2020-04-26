@@ -2255,6 +2255,36 @@ static int decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AVPacke
     return 0;
 }
 
+static int decode_drain_mode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AVPacket *pkt)
+{
+    int ret;
+
+    *got_frame = 0;
+
+    /*if (pkt) */{
+        ret = avcodec_send_packet(avctx, pkt);
+        // In particular, we don't expect AVERROR(EAGAIN), because we read all
+        // decoded frames with avcodec_receive_frame() until done.
+        if (ret < 0 && ret != AVERROR_EOF){
+			av_log(avctx, AV_LOG_ERROR,
+                   "drain_mode:Failed to send packet to avcodec:%s\n", av_err2str(ret));
+            return ret;
+        }
+    }
+
+    ret = avcodec_receive_frame(avctx, frame);
+    if (ret < 0 && ret != AVERROR(EAGAIN)){
+		av_log(avctx, AV_LOG_ERROR,
+                   "drain_mode:Failed to receive frame from avcodec:%s\n", av_err2str(ret));
+        return ret;
+    }
+    if (ret >= 0)
+        *got_frame = 1;
+
+    return 0;
+}
+
+
 static int send_frame_to_filters(InputStream *ist, AVFrame *decoded_frame)
 {
     int i, ret;
@@ -2353,6 +2383,13 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
     int64_t best_effort_timestamp;
     int64_t dts = AV_NOPTS_VALUE;
     AVPacket avpkt;
+	//添加一个参数，用于获取force_discard_video_nonkeyframes
+	int file_index = ist->file_index;
+	InputFile *ifile = input_files[file_index];
+	/*AVPacket avpkt_flush;
+	av_init_packet(&avpkt_flush);
+	avpkt_flush.data=NULL;
+	avpkt_flush.size=0;*/
 
     // With fate-indeo3-2, we're getting 0-sized packets before EOF for some
     // reason. This seems like a semi-critical bug. Don't trigger EOF, and
@@ -2388,6 +2425,29 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int64_
     update_benchmark("decode_video %d.%d", ist->file_index, ist->st->index);
     if (ret < 0)
         *decode_failed = 1;
+	//为了快速出关键帧的图像，在fdv_nokey参数打开以后,送null包进去
+	if(ist->dec_ctx->codec_type==AVMEDIA_TYPE_VIDEO
+		&&ifile&&ifile->force_discard_video_nonkey>0
+		&&pkt&&pkt->size >0&&!!(pkt->flags&&AV_PKT_FLAG_KEY)){
+		av_log(ist->dec_ctx, AV_LOG_DEBUG,"nb_packets:%d,packet size:%d,ret=%d,got_output=%d,pkt->flags:%d\n",ist->nb_packets,pkt->size,ret,*got_output,pkt->flags);
+		{
+			//ret = decode(ist->dec_ctx, decoded_frame, got_output,  &avpkt_flush);
+			ret=decode_drain_mode(ist->dec_ctx, decoded_frame, got_output,  NULL);
+			av_log(ist->dec_ctx, AV_LOG_DEBUG,"decode ret=%d\n",ret);
+			//在drain mode后，如果想继续使用的话，就flush一下
+			avcodec_flush_buffers(ist->dec_ctx);
+			if(ret<0){
+				av_log(ist->dec_ctx, AV_LOG_WARNING,"force discard nonkeyframes decode failed,previous packet size:%d.\n",pkt->size);
+				*decode_failed = 1;
+				break;
+			}
+			if(*got_output>0){
+				av_log(ist->dec_ctx, AV_LOG_DEBUG,"decode got frame got_output=%d,ret=%d\n",*got_output,ret);
+				break;
+			}
+		}
+		 
+	}
 
     // The following line may be required in some cases where there is no parser
     // or the parser does not has_b_frames correctly
