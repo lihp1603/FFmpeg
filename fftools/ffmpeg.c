@@ -341,9 +341,15 @@ static void
 sigterm_handler(int sig)
 {
     int ret;
+	av_log(NULL, AV_LOG_DEBUG, "received system signal(%d)\n",sig);
     received_sigterm = sig;
     received_nb_signals++;
+	//用于底层调用decode_interrupt_cb退出
+	received_nb_signals++;
     term_exit_sigsafe();
+	av_log(NULL, AV_LOG_DEBUG, "received system signals cout:%d\n",received_nb_signals);
+	
+	
     if(received_nb_signals > 3) {
         ret = write(2/*STDERR_FILENO*/, "Received > 3 system signals, hard exiting\n",
                     strlen("Received > 3 system signals, hard exiting\n"));
@@ -483,7 +489,6 @@ const AVIOInterruptCB int_cb = { decode_interrupt_cb, NULL };
 static void ffmpeg_cleanup(int ret)
 {
     int i, j;
-
     if (do_benchmark) {
         int maxrss = getmaxrss() / 1024;
         av_log(NULL, AV_LOG_INFO, "bench: maxrss=%ikB\n", maxrss);
@@ -4330,7 +4335,8 @@ static int process_input(int file_index)
     is  = ifile->ctx;
 	//读取数据帧
     ret = get_input_packet(ifile, &pkt);
-
+	//打印信息调试用
+	av_log(NULL, AV_LOG_DEBUG,"get_input_packet return %d\n",ret);
     if (ret == AVERROR(EAGAIN)) {
         ifile->eagain = 1;
         return ret;
